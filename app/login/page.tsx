@@ -1,0 +1,6 @@
+"use client";
+import { useState } from "react";
+export default function LoginPage() {
+  const [error,setError]=useState(""),[loading,setLoading]=useState(false);
+  return <main className="auth-page"><section className="auth-card"><img src="/brand/jd-soluciones-logo.png" alt="JD Soluciones Biomédicas"/><span>PORTAL ADMINISTRATIVO</span><h1>Iniciar sesión</h1><p>Ingresa con el correo y la contraseña asignados a tu perfil.</p><form onSubmit={async e=>{e.preventDefault();setError("");setLoading(true);try{const f=new FormData(e.currentTarget);const r=await fetch('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(Object.fromEntries(f))});const data=await r.json().catch(()=>({error:"El servidor no respondió correctamente."}));if(r.ok)location.href='/portal';else setError(data.error||"No pudimos iniciar sesión.")}catch{setError("No pudimos conectar con el servidor. Inténtalo nuevamente.")}finally{setLoading(false)}}}><label>Correo electrónico<input name="email" type="email" required autoComplete="email"/></label><label>Contraseña<input name="password" type="password" required autoComplete="current-password"/></label>{error&&<em>{error}</em>}<button disabled={loading}>{loading?"Verificando…":"Ingresar al portal"}</button></form><a href="/">← Volver al sitio web</a></section></main>;
+}

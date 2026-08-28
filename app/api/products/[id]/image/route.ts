@@ -1,0 +1,3 @@
+import { selectRows } from "../../../../../db/supabase";
+import { getFile } from "../../../../../db/file-storage";
+export async function GET(_:Request,context:{params:Promise<{id:string}>}){const{id}=await context.params;const[p]=await selectRows<Record<string,any>>("products",`select=image_key,image_content_type,active&id=eq.${Number(id)}&active=eq.true&limit=1`);if(!p?.imageKey)return new Response(null,{status:404});const object=await getFile(p.imageKey);if(!object)return new Response(null,{status:404});return new Response(object.body,{headers:{"content-type":object.type||p.imageContentType||"application/octet-stream","cache-control":"public, max-age=3600"}})}

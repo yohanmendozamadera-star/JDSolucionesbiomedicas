@@ -1,0 +1,4 @@
+const PROJECT_URL="https://lhhosezgalgzexgrcsjd.supabase.co",BUCKET="jd-files";
+function config(){const secret=process.env.SUPABASE_SECRET_KEY;if(!secret)throw new Error("Supabase no está configurado en el servidor.");return{url:process.env.SUPABASE_URL||PROJECT_URL,secret}}
+export async function putFile(key:string,data:ArrayBuffer,type:string){const{url,secret}=config(),r=await fetch(`${url}/storage/v1/object/${BUCKET}/${key}`,{method:"POST",headers:{apikey:secret,authorization:`Bearer ${secret}`,"content-type":type,"x-upsert":"true"},body:data});if(!r.ok)throw new Error(`No se pudo guardar el archivo: ${await r.text()}`)}
+export async function getFile(key:string){const{url,secret}=config(),r=await fetch(`${url}/storage/v1/object/${BUCKET}/${key}`,{headers:{apikey:secret,authorization:`Bearer ${secret}`}});if(!r.ok)return null;return{body:await r.arrayBuffer(),type:r.headers.get("content-type")||"application/octet-stream"}}
