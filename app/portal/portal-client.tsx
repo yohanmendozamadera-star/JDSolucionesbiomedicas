@@ -4,11 +4,12 @@ import { useEffect, useState } from "react";
 import CompaniesView from "./companies-view";
 import { OrdersView, ProductsView, QuotationsView, SettingsView } from "./commercial-views";
 import ExpensesView from "./expenses-view";
+import AssistantView from "./assistant-view";
 
-type Role = "superowner" | "owner" | "admin";
-type Profile = { id: number; name: string; email: string; role: "owner" | "admin"; company: string; status: string };
+type Role = "superowner" | "owner" | "admin" | "technician";
+type Profile = { id: number; name: string; email: string; role: "owner" | "admin" | "technician"; company: string; status: string };
 
-const menuBase = [["Dashboard","⌂"],["Operación","⚙"],["Productos","◆"],["Cotizaciones","◫"],["Pedidos","▣"],["Facturación","▧"],["Gastos","$"]];
+const menuBase = [["Dashboard","⌂"],["Operación","⚙"],["Asistente técnico","✦"],["Productos","◆"],["Cotizaciones","◫"],["Pedidos","▣"],["Facturación","▧"],["Gastos","$"]];
 const records: Record<string, string[][]> = {
   "Operación": [["SRV-1082","Mantenimiento preventivo","En proceso"],["SRV-1081","Calibración de lensómetro","Programado"],["SRV-1080","Reparación electrónica","Finalizado"]],
   "Cotizaciones": [["COT-0918","Autorefractómetro AR-310","Por revisar"],["COT-0917","Calibración anual","Enviada"],["COT-0916","Lámpara de hendidura","Aceptada"]],
@@ -22,7 +23,7 @@ export default function PortalClient({ email, name, role, company }: { email: st
   const [notice, setNotice] = useState("");
   const [collapsed, setCollapsed] = useState(false);
   const menu = role === "superowner" ? [...menuBase.slice(0,2), ["Empresas","▦"], ...menuBase.slice(2), ["Configuraciones","◈"], ["Usuarios y permisos","♙"]] : menuBase;
-  const roleLabel = role === "superowner" ? "Superpropietario" : role === "owner" ? "Propietario" : role === "admin" ? "Administrador" : "Acceso pendiente";
+  const roleLabel = role === "superowner" ? "Superpropietario" : role === "owner" ? "Propietario" : role === "admin" ? "Administrador" : role === "technician" ? "Técnico" : "Acceso pendiente";
 
   const loadProfiles = async () => {
     if (role !== "superowner") return;
@@ -42,7 +43,7 @@ export default function PortalClient({ email, name, role, company }: { email: st
   };
 
   return <div className={`owner-portal ${collapsed ? "sidebar-collapsed" : ""}`}><aside className="owner-sidebar"><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={collapsed ? "Expandir menú" : "Contraer menú"} title={collapsed ? "Expandir menú" : "Contraer menú"}>{collapsed ? "›" : "‹"}</button><a href="/" className="owner-logo"><img src="/brand/jd-soluciones-logo.png" alt="JD Soluciones Biomédicas" /></a><div className="account-chip"><span>{name.slice(0,2).toUpperCase()}</span><div><b>{name}</b><small>{roleLabel}</small></div></div><nav>{menu.map(item => <button key={item[0]} title={collapsed ? item[0] : undefined} className={tab === item[0] ? "active" : ""} onClick={() => setTab(item[0])}><i>{item[1]}</i><span>{item[0]}</span></button>)}</nav><div className="owner-id"><small>CUENTA ACTIVA</small><b>{email}</b></div><a className="portal-exit" href="/api/auth/logout">Cerrar sesión</a></aside>
-    <main className="owner-main"><header><div><small>PORTAL DE {company.toUpperCase()}</small><h1>{tab}</h1></div><div className="role-badge">◆ {roleLabel}</div></header><section className="owner-content">{tab === "Dashboard" && <Dashboard name={name} role={roleLabel} />}{records[tab] && !["Cotizaciones","Pedidos"].includes(tab) && <Records title={tab} rows={records[tab]} />}{tab === "Productos" && <ProductsView />}{tab === "Cotizaciones" && <QuotationsView />}{tab === "Pedidos" && <OrdersView />}{tab === "Gastos" && <ExpensesView />}{tab === "Empresas" && <CompaniesView />}{tab === "Configuraciones" && <SettingsView />}{tab === "Usuarios y permisos" && <Permissions profiles={profiles} createProfile={createProfile} />}</section></main>{notice && <div className="portal-toast">✓ {notice}<button onClick={() => setNotice("")}>×</button></div>}</div>;
+    <main className="owner-main"><header><div><small>PORTAL DE {company.toUpperCase()}</small><h1>{tab}</h1></div><div className="role-badge">◆ {roleLabel}</div></header><section className="owner-content">{tab === "Dashboard" && <Dashboard name={name} role={roleLabel} />}{records[tab] && !["Cotizaciones","Pedidos"].includes(tab) && <Records title={tab} rows={records[tab]} />}{tab === "Asistente técnico" && <AssistantView />}{tab === "Productos" && <ProductsView />}{tab === "Cotizaciones" && <QuotationsView />}{tab === "Pedidos" && <OrdersView />}{tab === "Gastos" && <ExpensesView />}{tab === "Empresas" && <CompaniesView />}{tab === "Configuraciones" && <SettingsView />}{tab === "Usuarios y permisos" && <Permissions profiles={profiles} createProfile={createProfile} />}</section></main>{notice && <div className="portal-toast">✓ {notice}<button onClick={() => setNotice("")}>×</button></div>}</div>;
 }
 
 function Dashboard({ name, role }: { name: string; role: string }) {
@@ -56,5 +57,5 @@ function Records({ title, rows }: { title: string; rows: string[][] }) {
 }
 
 function Permissions({ profiles, createProfile }: { profiles: Profile[]; createProfile: (e: React.FormEvent<HTMLFormElement>) => void }) {
-  return <div className="permissions-layout"><section className="permission-form"><span>ACCESO EXCLUSIVO</span><h2>Crear perfil autorizado</h2><p>Solo el superpropietario puede asignar nuevos propietarios o administradores. El sistema generará un enlace para que cada usuario cree su contraseña.</p><form onSubmit={createProfile}><label>Nombre completo<input name="name" required /></label><label>Correo autorizado<input name="email" type="email" required /></label><label>Empresa<input name="company" required /></label><label>Tipo de acceso<select name="role"><option value="owner">Propietario</option><option value="admin">Administrador</option></select></label><button type="submit">Crear perfil y generar enlace</button></form></section><section className="permission-list"><h3>Usuarios autorizados</h3><div className="superowner-row"><i>◆</i><span><b>Yohan Mendoza</b><small>yohan_mendoza@outlook.com</small></span><em>Superpropietario</em></div>{profiles.map(p => <div className="profile-row" key={p.id}><i>{p.name.slice(0,2).toUpperCase()}</i><span><b>{p.name}</b><small>{p.email} · {p.company}</small></span><em>{p.role === "owner" ? "Propietario" : "Administrador"}</em></div>)}</section></div>;
+  return <div className="permissions-layout"><section className="permission-form"><span>ACCESO EXCLUSIVO</span><h2>Crear perfil autorizado</h2><p>Solo el superpropietario puede asignar propietarios, administradores o técnicos. El sistema generará un enlace para que cada usuario cree su contraseña.</p><form onSubmit={createProfile}><label>Nombre completo<input name="name" required /></label><label>Correo autorizado<input name="email" type="email" required /></label><label>Empresa<input name="company" required /></label><label>Tipo de acceso<select name="role"><option value="owner">Propietario</option><option value="admin">Administrador</option><option value="technician">Técnico</option></select></label><button type="submit">Crear perfil y generar enlace</button></form></section><section className="permission-list"><h3>Usuarios autorizados</h3><div className="superowner-row"><i>◆</i><span><b>Yohan Mendoza</b><small>yohan_mendoza@outlook.com</small></span><em>Superpropietario</em></div>{profiles.map(p => <div className="profile-row" key={p.id}><i>{p.name.slice(0,2).toUpperCase()}</i><span><b>{p.name}</b><small>{p.email} · {p.company}</small></span><em>{p.role === "owner" ? "Propietario" : p.role === "technician" ? "Técnico" : "Administrador"}</em></div>)}</section></div>;
 }

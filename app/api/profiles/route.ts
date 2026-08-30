@@ -16,7 +16,9 @@ export async function POST(request: Request) {
   if (!name || !email || !company) return Response.json({ error: "Completa todos los datos." }, { status: 400 });
   const activationToken = randomToken();
   try {
-    const profile = await insertRow<Record<string, any>>("app_users", { name, email, company, role: payload.role === "admin" ? "admin" : "owner", activationHash: await sha256(activationToken) });
+    const requestedRole=String(payload.role||"owner");
+    const role=["owner","admin","technician"].includes(requestedRole)?requestedRole:"owner";
+    const profile = await insertRow<Record<string, any>>("app_users", { name, email, company, role, activationHash: await sha256(activationToken) });
     return Response.json({ profile, activationUrl: `${new URL(request.url).origin}/activar?token=${activationToken}` }, { status: 201 });
   } catch { return Response.json({ error: "Ese correo ya tiene un perfil." }, { status: 409 }); }
 }
