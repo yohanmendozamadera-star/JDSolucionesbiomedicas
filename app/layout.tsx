@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./assistant-images.css";
 
 export const metadata: Metadata = {
   title: "JD Soluciones Biomédicas | Tecnología para ópticas",

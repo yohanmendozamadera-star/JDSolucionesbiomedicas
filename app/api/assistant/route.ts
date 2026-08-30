@@ -1,11 +1,13 @@
 import { getSessionUser } from "../../app-auth";
 import { filterValue, insertRow, selectRows, updateRows } from "../../../db/supabase";
+import { putFile } from "../../../db/file-storage";
 
 const nullableString={type:["string","null"]},nullableInteger={type:["integer","null"]},nullableNumber={type:["number","null"]},nullableBoolean={type:["boolean","null"]};
 const calibrationKeys=["base","up","down","error","tolerance","verification","reference","refUp","refDown","refError","refTolerance","refVerification"];
 const calibrationRow={type:"object",additionalProperties:false,required:calibrationKeys,properties:Object.fromEntries(calibrationKeys.map(key=>[key,nullableString]))};
 const draftKeys=["serviceType","serviceDate","startTime","endTime","clientPhone","summary","reportedFaultCode","foundFaultCode","serviceDetail","technician","serviceValue","calibrationVerified","calibrationRowCount","calibrationMeasurements","observations","receivedBy"];
 const schema={type:"object",additionalProperties:false,required:["assistantReply","title","companyId","equipmentId","draft"],properties:{assistantReply:{type:"string"},title:{type:"string"},companyId:nullableInteger,equipmentId:nullableInteger,draft:{type:"object",additionalProperties:false,required:draftKeys,properties:{serviceType:nullableString,serviceDate:nullableString,startTime:nullableString,endTime:nullableString,clientPhone:nullableString,summary:nullableString,reportedFaultCode:nullableString,foundFaultCode:nullableString,serviceDetail:nullableString,technician:nullableString,serviceValue:nullableNumber,calibrationVerified:nullableBoolean,calibrationRowCount:nullableInteger,calibrationMeasurements:{type:["array","null"],items:calibrationRow,maxItems:4},observations:nullableString,receivedBy:nullableString}}}};
+const imageSchema={type:"object",additionalProperties:false,required:["assistantReply","rowCount","measurements","uncertainFields"],properties:{assistantReply:{type:"string"},rowCount:{type:"integer"},measurements:{type:"array",items:calibrationRow,maxItems:4},uncertainFields:{type:"array",items:{type:"string"}}}};
 
 async function requireUser(){const user=await getSessionUser();if(!user)throw new Error("UNAUTHORIZED");return user}
 const safe=(value:unknown)=>String(value??"").trim();
@@ -64,26 +66,51 @@ async function askOpenAI(conversation:any,messages:any[],catalog:any[]){
   if(!raw)throw new Error("OPENAI_EMPTY");return JSON.parse(raw);
 }
 
+async function readCalibrationImage(bytes:ArrayBuffer,type:string){
+  const key=process.env.OPENAI_API_KEY;if(!key)throw new Error("OPENAI_MISSING");
+  const imageUrl=`data:${type};base64,${Buffer.from(bytes).toString("base64")}`;
+  const response=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{authorization:`Bearer ${key}`,"content-type":"application/json"},body:JSON.stringify({model:process.env.OPENAI_VISION_MODEL||process.env.OPENAI_MODEL||"gpt-4o-mini",instructions:"Lee exclusivamente la tabla de verificación de calibración de la imagen. Puede contener máximo 4 filas y estas 12 columnas en orden: Base, Lectura arriba, Lectura abajo, Error, Tolerancia, Verificación, Referencia, Lectura arriba de referencia, Lectura abajo de referencia, Error de referencia, Tolerancia de referencia y Verificación de referencia. Transcribe literalmente; no calcules, corrijas ni inventes. Usa null cuando una celda esté vacía o no sea legible. Indica en uncertainFields cada celda dudosa usando el formato fila N - nombre de columna. En assistantReply presenta un resumen claro y pide confirmación antes de guardar.",input:[{role:"user",content:[{type:"input_text",text:"Extrae las mediciones visibles de esta tabla técnica."},{type:"input_image",image_url:imageUrl,detail:"high"}]}],text:{format:{type:"json_schema",name:"calibration_image_reading",strict:true,schema:imageSchema}},max_output_tokens:1600})});
+  if(!response.ok){const failure=await response.json().catch(()=>null),code=safe(failure?.error?.code)||safe(failure?.error?.type)||`http_${response.status}`,detail=safeOpenAIError(failure?.error?.message)||"Sin detalle adicional";throw new Error(`OPENAI_${code}|${detail}`)}
+  const data=await response.json(),raw=data.output_text||data.output?.flatMap((item:any)=>item.content||[]).find((item:any)=>item.type==="output_text")?.text;if(!raw)throw new Error("OPENAI_EMPTY");return JSON.parse(raw);
+}
+
 async function persistReport(conversation:any,draft:any,status:"pending"|"completed"){
   const equipmentId=Number(draft.equipmentId||conversation.equipmentId||0);if(!equipmentId)throw new Error("EQUIPMENT_REQUIRED");
   const [equipment]=await selectRows<Record<string,any>>("equipment",`select=*&id=eq.${equipmentId}&limit=1`);if(!equipment)throw new Error("EQUIPMENT_REQUIRED");
   if(status==="completed"&&(!draft.serviceType||!draft.serviceDate||!draft.technician||!draft.summary||!draft.serviceDetail))throw new Error("REPORT_INCOMPLETE");
   if(status==="completed"&&draft.calibrationVerified&&(!draft.calibrationRowCount||!Array.isArray(draft.calibrationMeasurements)||draft.calibrationMeasurements.length<Number(draft.calibrationRowCount)))throw new Error("CALIBRATION_REQUIRED");
-  const values={equipmentId,serviceType:draft.serviceType||"Pendiente",status,technician:draft.technician||"Pendiente",summary:draft.summary||"Borrador creado desde el asistente técnico",observations:draft.observations,serviceValue:Number(draft.serviceValue||0),serviceDate:new Date(`${reportDate(draft.serviceDate)}T12:00:00-05:00`),startTime:draft.startTime,endTime:draft.endTime,clientPhone:draft.clientPhone,equipmentDescription:equipment.name,equipmentModel:equipment.model,equipmentBrand:equipment.brand,equipmentSerial:equipment.serialNumber,reportedFaultCode:draft.reportedFaultCode,foundFaultCode:draft.foundFaultCode,serviceDetail:draft.serviceDetail,calibrationVerified:Boolean(draft.calibrationVerified),calibrationMeasurements:calibrationJson(draft.calibrationMeasurements),receivedBy:draft.receivedBy};
+  const values={equipmentId,serviceType:draft.serviceType||"Pendiente",status,technician:draft.technician||"Pendiente",summary:draft.summary||"Borrador creado desde el asistente técnico",observations:draft.observations,serviceValue:Number(draft.serviceValue||0),serviceDate:new Date(`${reportDate(draft.serviceDate)}T12:00:00-05:00`),startTime:draft.startTime,endTime:draft.endTime,clientPhone:draft.clientPhone,equipmentDescription:equipment.name,equipmentModel:equipment.model,equipmentBrand:equipment.brand,equipmentSerial:equipment.serialNumber,reportedFaultCode:draft.reportedFaultCode,foundFaultCode:draft.foundFaultCode,serviceDetail:draft.serviceDetail,calibrationVerified:Boolean(draft.calibrationVerified),calibrationMeasurements:calibrationJson(draft.calibrationMeasurements),calibrationEvidenceKey:draft.calibrationEvidenceKey,receivedBy:draft.receivedBy};
   if(conversation.reportId){const[report]=await updateRows<Record<string,any>>("service_reports",`id=eq.${Number(conversation.reportId)}&status=neq.completed`,values);if(report)return report}
   const[last]=await selectRows<{id:number}>("service_reports","select=id&order=id.desc&limit=1");return insertRow<Record<string,any>>("service_reports",{...values,code:`SR${String((last?.id??0)+1).padStart(5,"0")}`});
 }
 
 export async function POST(request:Request){
   try{
-    const user=await requireUser(),body=await request.json(),action=safe(body.action);
+    const user=await requireUser(),multipart=request.headers.get("content-type")?.includes("multipart/form-data"),body:any=multipart?await request.formData():await request.json(),action=safe(multipart?body.get("action"):body.action);
     if(action==="create"){
       const conversation=await insertRow<Record<string,any>>("assistant_conversations",{code:`CHAT-${Date.now().toString(36).toUpperCase()}`,title:"Nuevo reporte de servicio",createdBy:Number(user.id),draft:{}});
       const greeting="Hola. Cuéntame para qué empresa y equipo realizaste el servicio; iré organizando el reporte contigo.";
       await insertRow("assistant_messages",{conversationId:conversation.id,role:"assistant",content:greeting});return Response.json({conversation,greeting},{status:201});
     }
-    const id=Number(body.conversationId||0),result=await details(id,user);if(!result)return Response.json({error:"Conversación no encontrada."},{status:404});
+    const id=Number(multipart?body.get("conversationId"):body.conversationId||0),result=await details(id,user);if(!result)return Response.json({error:"Conversación no encontrada."},{status:404});
     if(result.conversation.status==="completed")return Response.json({error:"Este chat ya generó un reporte finalizado."},{status:409});
+    if(action==="image"){
+      const image=body.get("image");if(!(image instanceof File)||!image.size)return Response.json({error:"Selecciona una imagen."},{status:400});
+      const allowed=new Set(["image/jpeg","image/png","image/webp"]);if(!allowed.has(image.type)||image.size>5*1024*1024)return Response.json({error:"La imagen debe ser JPG, PNG o WEBP y pesar máximo 5 MB."},{status:400});
+      const bytes=await image.arrayBuffer(),attachmentKey=`assistant/${id}/${crypto.randomUUID()}-${image.name.replace(/[^a-zA-Z0-9._-]/g,"-")}`;await putFile(attachmentKey,bytes,image.type);
+      await insertRow("assistant_messages",{conversationId:id,role:"user",content:`Imagen de mediciones adjunta: ${image.name}`,attachmentKey,attachmentName:image.name,attachmentContentType:image.type});
+      const reading=await readCalibrationImage(bytes,image.type),pendingCalibration={rowCount:Math.min(4,Math.max(0,Number(reading.rowCount||reading.measurements?.length||0))),measurements:reading.measurements||[],uncertainFields:reading.uncertainFields||[],imageKey:attachmentKey,fileName:image.name};
+      const reply=`${reading.assistantReply}\n\n${pendingCalibration.uncertainFields.length?`Campos que debes revisar: ${pendingCalibration.uncertainFields.join(", ")}.`:"No marqué campos dudosos, pero confirma visualmente los valores antes de incorporarlos."}`;
+      await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});
+      const draft={...(result.conversation.draft||{}),pendingCalibration},[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{draft,updatedAt:new Date()});return Response.json({conversation,message:reply});
+    }
+    if(action==="confirmCalibration"||action==="discardCalibration"){
+      const pending=result.conversation.draft?.pendingCalibration;if(!pending)return Response.json({error:"No hay mediciones pendientes de confirmación."},{status:400});
+      const draft={...(result.conversation.draft||{})};delete draft.pendingCalibration;
+      let reply="Lectura descartada. Puedes adjuntar una nueva imagen más clara.";
+      if(action==="confirmCalibration"){draft.calibrationVerified=true;draft.calibrationRowCount=pending.rowCount;draft.calibrationMeasurements=pending.measurements;draft.calibrationEvidenceKey=pending.imageKey;reply=`Confirmado. Incorporé ${pending.rowCount} fila(s) de calibración al borrador. Ahora puedes guardarlo parcialmente o continuar el reporte.`}
+      await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});const[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{draft,updatedAt:new Date()});return Response.json({conversation,message:reply});
+    }
     if(action==="message"){
       const content=safe(body.content);if(!content)return Response.json({error:"Escribe un mensaje."},{status:400});
       await insertRow("assistant_messages",{conversationId:id,role:"user",content});
