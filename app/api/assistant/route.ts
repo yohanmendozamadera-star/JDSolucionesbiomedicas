@@ -30,8 +30,13 @@ async function askOpenAI(conversation:any,messages:any[],catalog:any[]){
   const key=process.env.OPENAI_API_KEY;if(!key)throw new Error("OPENAI_MISSING");
   const instructions=`Eres el asistente técnico interno de JD Soluciones Biomédicas. Tu objetivo es completar un reporte de servicio mediante una conversación natural en español colombiano. Haz una sola pregunta clara por turno cuando falten datos. Nunca inventes empresas, equipos, mediciones, fechas, horas, valores ni diagnósticos. Conserva en draft cualquier dato ya confirmado. Los tipos permitidos son Correctivo, Preventivo, Instalación, Garantía o Diagnóstico. Para finalizar son obligatorios: equipmentId, serviceType, serviceDate, technician, summary y serviceDetail. Si hay verificación de calibración, indica que las mediciones se completarán después en el formulario formal. Catálogo autorizado: ${JSON.stringify(catalog)}. Borrador actual: ${JSON.stringify(conversation.draft||{})}. Devuelve únicamente el esquema solicitado.`;
   const input=messages.slice(-20).map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.content}));
-  const response=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{authorization:`Bearer ${key}`,"content-type":"application/json"},body:JSON.stringify({model:process.env.OPENAI_MODEL||"gpt-5.5",instructions,input,text:{format:{type:"json_schema",name:"service_report_turn",strict:true,schema}},max_output_tokens:1200})});
-  if(!response.ok)throw new Error(`OPENAI_${response.status}`);
+  const response=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{authorization:`Bearer ${key}`,"content-type":"application/json"},body:JSON.stringify({model:process.env.OPENAI_MODEL||"gpt-4o-mini",instructions,input,text:{format:{type:"json_schema",name:"service_report_turn",strict:true,schema}},max_output_tokens:1200})});
+  if(!response.ok){
+    const failure=await response.json().catch(()=>null);
+    const code=safe(failure?.error?.code)||`http_${response.status}`;
+    console.error("OpenAI request failed",response.status,code,safe(failure?.error?.message));
+    throw new Error(`OPENAI_${code}`);
+  }
   const data=await response.json();const raw=data.output_text||data.output?.flatMap((item:any)=>item.content||[]).find((item:any)=>item.type==="output_text")?.text;
   if(!raw)throw new Error("OPENAI_EMPTY");return JSON.parse(raw);
 }
@@ -76,7 +81,10 @@ export async function POST(request:Request){
     const message=error instanceof Error?error.message:"";console.error("Assistant API",message);
     if(message==="UNAUTHORIZED")return Response.json({error:"No autorizado"},{status:401});
     if(message==="OPENAI_MISSING")return Response.json({error:"La clave de OpenAI no está configurada en Netlify."},{status:503});
-    if(message.startsWith("OPENAI_"))return Response.json({error:"OpenAI no pudo responder. Verifica la clave, saldo y modelo configurado."},{status:502});
+    if(message==="OPENAI_invalid_api_key")return Response.json({error:"La clave de OpenAI configurada no es válida. Revisa OPENAI_API_KEY en Netlify."},{status:502});
+    if(message==="OPENAI_insufficient_quota")return Response.json({error:"La cuenta de la API de OpenAI no tiene saldo disponible. Debes activar la facturación o agregar crédito en OpenAI Platform."},{status:502});
+    if(message==="OPENAI_model_not_found")return Response.json({error:"El modelo configurado no está disponible para esta clave. Revisa OPENAI_MODEL en Netlify o elimínala para usar el modelo compatible predeterminado."},{status:502});
+    if(message.startsWith("OPENAI_"))return Response.json({error:"OpenAI no pudo procesar el mensaje. Inténtalo de nuevo; si continúa, revisa la configuración de la API en Netlify."},{status:502});
     if(message==="EQUIPMENT_REQUIRED")return Response.json({error:"Antes de guardar, identifica claramente la empresa y el equipo en la conversación."},{status:400});
     if(message==="REPORT_INCOMPLETE")return Response.json({error:"Faltan datos obligatorios. Continúa conversando hasta completar equipo, tipo, fecha, técnico, falla y detalle."},{status:400});
     return Response.json({error:"No fue posible procesar el asistente técnico."},{status:500});
