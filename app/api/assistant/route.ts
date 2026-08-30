@@ -8,6 +8,19 @@ const schema={type:"object",additionalProperties:false,required:["assistantReply
 async function requireUser(){const user=await getSessionUser();if(!user)throw new Error("UNAUTHORIZED");return user}
 const safe=(value:unknown)=>String(value??"").trim();
 const safeOpenAIError=(value:unknown)=>safe(value).replace(/sk-[A-Za-z0-9_-]+/g,"[clave oculta]").slice(0,300);
+const wantsDraftSave=(value:string)=>/\b(guardar?|guarda|guarde|guardalo|guárdalo)\b[\s\S]{0,35}\b(parcial|borrador)\b|\b(parcial|borrador)\b[\s\S]{0,35}\b(guardar?|guarda|guarde|guardalo|guárdalo)\b/i.test(value);
+const wantsFinalize=(value:string)=>/\b(finaliza|finalizar|finalízalo|termina|terminar|completa|completar)\b[\s\S]{0,30}\b(reporte|informe)\b|\b(reporte|informe)\b[\s\S]{0,30}\b(finaliza|finalizar|finalízalo|termina|terminar)\b/i.test(value);
+function requestedTitle(value:string){
+  const match=value.match(/(?:cambia(?:r)?|pon(?:er)?|coloca(?:r)?|renombra(?:r)?)[\s\S]{0,25}?(?:nombre|t[ií]tulo)(?:\s+del\s+chat)?\s+(?:a|como|por)\s+["“']?(.+?)["”']?[.!?]*$/i)
+    ||value.match(/(?:ponle|col[oó]cale)\s+(?:al\s+chat\s+)?(?:el\s+nombre\s+)?["“']?(.+?)["”']?[.!?]*$/i);
+  return match?safe(match[1]).slice(0,100):"";
+}
+function reportDate(value:unknown){
+  const text=safe(value),today=new Intl.DateTimeFormat("en-CA",{timeZone:"America/Bogota",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+  if(!text||/^hoy$/i.test(text))return today;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(text))return text;
+  const parts=text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);return parts?`${parts[3]}-${parts[2].padStart(2,"0")}-${parts[1].padStart(2,"0")}`:today;
+}
 
 async function details(id:number,user:any){
   const [conversation]=await selectRows<Record<string,any>>("assistant_conversations",`select=*&id=eq.${id}&created_by=eq.${Number(user.id)}&limit=1`);
@@ -29,7 +42,7 @@ export async function GET(request:Request){
 
 async function askOpenAI(conversation:any,messages:any[],catalog:any[]){
   const key=process.env.OPENAI_API_KEY;if(!key)throw new Error("OPENAI_MISSING");
-  const instructions=`Eres el asistente técnico interno de JD Soluciones Biomédicas. Tu objetivo es completar un reporte de servicio mediante una conversación natural en español colombiano. Haz una sola pregunta clara por turno cuando falten datos. Nunca inventes empresas, equipos, mediciones, fechas, horas, valores ni diagnósticos. Conserva en draft cualquier dato ya confirmado. Los tipos permitidos son Correctivo, Preventivo, Instalación, Garantía o Diagnóstico. Para finalizar son obligatorios: equipmentId, serviceType, serviceDate, technician, summary y serviceDetail. Si hay verificación de calibración, indica que las mediciones se completarán después en el formulario formal. Catálogo autorizado: ${JSON.stringify(catalog)}. Borrador actual: ${JSON.stringify(conversation.draft||{})}. Devuelve únicamente el esquema solicitado.`;
+  const instructions=`Eres el asistente técnico interno de JD Soluciones Biomédicas. Tu objetivo es completar un reporte de servicio mediante una conversación natural en español colombiano. Haz una sola pregunta clara por turno cuando falten datos. Nunca inventes empresas, equipos, mediciones, fechas, horas, valores ni diagnósticos. Conserva en draft cualquier dato ya confirmado. Devuelve serviceDate siempre en formato AAAA-MM-DD; hoy en Colombia es ${reportDate("hoy")}. Los tipos permitidos son Correctivo, Preventivo, Instalación, Garantía o Diagnóstico. Para finalizar son obligatorios: equipmentId, serviceType, serviceDate, technician, summary y serviceDetail. Si hay verificación de calibración, indica que las mediciones se completarán después en el formulario formal. Nunca afirmes que guardaste, finalizaste o creaste un reporte: esas acciones las confirma exclusivamente el sistema. Catálogo autorizado: ${JSON.stringify(catalog)}. Borrador actual: ${JSON.stringify(conversation.draft||{})}. Devuelve únicamente el esquema solicitado.`;
   const input=messages.slice(-20).map(m=>({role:m.role==="assistant"?"assistant":"user",content:m.content}));
   const response=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{authorization:`Bearer ${key}`,"content-type":"application/json"},body:JSON.stringify({model:process.env.OPENAI_MODEL||"gpt-4o-mini",instructions,input,text:{format:{type:"json_schema",name:"service_report_turn",strict:true,schema}},max_output_tokens:1200})});
   if(!response.ok){
@@ -47,7 +60,7 @@ async function persistReport(conversation:any,draft:any,status:"pending"|"comple
   const equipmentId=Number(draft.equipmentId||conversation.equipmentId||0);if(!equipmentId)throw new Error("EQUIPMENT_REQUIRED");
   const [equipment]=await selectRows<Record<string,any>>("equipment",`select=*&id=eq.${equipmentId}&limit=1`);if(!equipment)throw new Error("EQUIPMENT_REQUIRED");
   if(status==="completed"&&(!draft.serviceType||!draft.serviceDate||!draft.technician||!draft.summary||!draft.serviceDetail))throw new Error("REPORT_INCOMPLETE");
-  const values={equipmentId,serviceType:draft.serviceType||"Pendiente",status,technician:draft.technician||"Pendiente",summary:draft.summary||"Borrador creado desde el asistente técnico",observations:draft.observations,serviceValue:Number(draft.serviceValue||0),serviceDate:draft.serviceDate?new Date(`${draft.serviceDate}T12:00:00`):new Date(),startTime:draft.startTime,endTime:draft.endTime,clientPhone:draft.clientPhone,equipmentDescription:equipment.name,equipmentModel:equipment.model,equipmentBrand:equipment.brand,equipmentSerial:equipment.serialNumber,reportedFaultCode:draft.reportedFaultCode,foundFaultCode:draft.foundFaultCode,serviceDetail:draft.serviceDetail,calibrationVerified:Boolean(draft.calibrationVerified),calibrationMeasurements:"{}",receivedBy:draft.receivedBy};
+  const values={equipmentId,serviceType:draft.serviceType||"Pendiente",status,technician:draft.technician||"Pendiente",summary:draft.summary||"Borrador creado desde el asistente técnico",observations:draft.observations,serviceValue:Number(draft.serviceValue||0),serviceDate:new Date(`${reportDate(draft.serviceDate)}T12:00:00-05:00`),startTime:draft.startTime,endTime:draft.endTime,clientPhone:draft.clientPhone,equipmentDescription:equipment.name,equipmentModel:equipment.model,equipmentBrand:equipment.brand,equipmentSerial:equipment.serialNumber,reportedFaultCode:draft.reportedFaultCode,foundFaultCode:draft.foundFaultCode,serviceDetail:draft.serviceDetail,calibrationVerified:Boolean(draft.calibrationVerified),calibrationMeasurements:"{}",receivedBy:draft.receivedBy};
   if(conversation.reportId){const[report]=await updateRows<Record<string,any>>("service_reports",`id=eq.${Number(conversation.reportId)}&status=neq.completed`,values);if(report)return report}
   const[last]=await selectRows<{id:number}>("service_reports","select=id&order=id.desc&limit=1");return insertRow<Record<string,any>>("service_reports",{...values,code:`SR${String((last?.id??0)+1).padStart(5,"0")}`});
 }
@@ -65,12 +78,24 @@ export async function POST(request:Request){
     if(action==="message"){
       const content=safe(body.content);if(!content)return Response.json({error:"Escribe un mensaje."},{status:400});
       await insertRow("assistant_messages",{conversationId:id,role:"user",content});
+      const newTitle=requestedTitle(content);
+      if(newTitle){
+        const reply=`Listo. El chat quedó guardado como “${newTitle}” y mantendrá este nombre.`;
+        await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});
+        const[conversation]=await updateRows<Record<string,any>>( "assistant_conversations",`id=eq.${id}`,{title:newTitle,draft:{...(result.conversation.draft||{}),titleLocked:true},updatedAt:new Date()});
+        return Response.json({conversation,message:reply});
+      }
       const allMessages=[...result.messages,{role:"user",content}],companies=await selectRows<Record<string,any>>("companies","select=id,name,city,status&order=name.asc"),equipment=await selectRows<Record<string,any>>("equipment","select=id,company_id,name,brand,model,serial_number&order=name.asc");
       const catalog=companies.map(company=>({companyId:company.id,company:company.name,city:company.city,equipment:equipment.filter(item=>item.companyId===company.id)}));
       const ai=await askOpenAI(result.conversation,allMessages,catalog),newFields=Object.fromEntries(Object.entries(ai.draft||{}).filter(([,value])=>value!==null&&value!=="")),draft={...(result.conversation.draft||{}),...newFields,...(ai.companyId?{companyId:ai.companyId}:{}),...(ai.equipmentId?{equipmentId:ai.equipmentId}:{})};
-      await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:ai.assistantReply});
-      const[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{title:ai.title||result.conversation.title,companyId:draft.companyId||result.conversation.companyId,equipmentId:draft.equipmentId||result.conversation.equipmentId,draft,status:"open",updatedAt:new Date()});
-      return Response.json({conversation,message:ai.assistantReply});
+      let reply=ai.assistantReply,report:any=null,status="open";
+      if(wantsDraftSave(content)||wantsFinalize(content)){
+        report=await persistReport(result.conversation,draft,wantsFinalize(content)?"completed":"pending");status=wantsFinalize(content)?"completed":"draft";
+        reply+=wantsFinalize(content)?`\n\nReporte ${report.code} finalizado correctamente.`:`\n\nBorrador ${report.code} guardado correctamente. Ya aparece en el historial del equipo y puedes abrir su PDF.`;
+      }
+      await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});
+      const[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{title:draft.titleLocked?result.conversation.title:(ai.title||result.conversation.title),companyId:draft.companyId||result.conversation.companyId,equipmentId:draft.equipmentId||result.conversation.equipmentId,draft,...(report?{reportId:report.id}:{}),status,updatedAt:new Date()});
+      return Response.json({conversation,message:reply,report});
     }
     if(action==="save"||action==="finalize"){
       const draft={...(result.conversation.draft||{}),...(body.draft||{})},report=await persistReport(result.conversation,draft,action==="finalize"?"completed":"pending");
