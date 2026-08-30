@@ -1,6 +1,7 @@
 import { getSessionUser } from "../../app-auth";
 import { filterValue, insertRow, selectRows, updateRows } from "../../../db/supabase";
 import { putFile } from "../../../db/file-storage";
+import { actionSummary, cleanPayload, executeAdminAction, interpretAdmin, isAdminRequest, readAdminAction } from "./admin-actions";
 
 const nullableString={type:["string","null"]},nullableInteger={type:["integer","null"]},nullableNumber={type:["number","null"]},nullableBoolean={type:["boolean","null"]};
 const calibrationKeys=["base","up","down","error","tolerance","verification","reference","refUp","refDown","refError","refTolerance","refVerification"];
@@ -111,6 +112,11 @@ export async function POST(request:Request){
       if(action==="confirmCalibration"){draft.calibrationVerified=true;draft.calibrationRowCount=pending.rowCount;draft.calibrationMeasurements=pending.measurements;draft.calibrationEvidenceKey=pending.imageKey;reply=`Confirmado. Incorporé ${pending.rowCount} fila(s) de calibración al borrador. Ahora puedes guardarlo parcialmente o continuar el reporte.`}
       await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});const[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{draft,updatedAt:new Date()});return Response.json({conversation,message:reply});
     }
+    if(action==="confirmAdmin"||action==="cancelAdmin"){
+      const pending=result.conversation.draft?.pendingAction;if(!pending)return Response.json({error:"No hay una acción administrativa pendiente."},{status:400});const draft={...(result.conversation.draft||{})};delete draft.pendingAction;delete draft.pendingAdminDraft;
+      if(action==="cancelAdmin"){const reply="Acción cancelada. No se modificó ningún registro.";await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});const[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{draft,updatedAt:new Date()});return Response.json({conversation,message:reply})}
+      const executed=await executeAdminAction(pending.intent,pending.payload,user);draft.lastResultLink=executed.link||null;const reply=executed.message;await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});const[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{draft,updatedAt:new Date()});return Response.json({conversation,message:reply,link:executed.link,record:executed.record});
+    }
     if(action==="message"){
       const content=safe(body.content);if(!content)return Response.json({error:"Escribe un mensaje."},{status:400});
       await insertRow("assistant_messages",{conversationId:id,role:"user",content});
@@ -120,6 +126,15 @@ export async function POST(request:Request){
         await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});
         const[conversation]=await updateRows<Record<string,any>>( "assistant_conversations",`id=eq.${id}`,{title:newTitle,draft:{...(result.conversation.draft||{}),titleLocked:true},updatedAt:new Date()});
         return Response.json({conversation,message:reply});
+      }
+      const currentAdmin=result.conversation.draft?.pendingAdminDraft;
+      if(isAdminRequest(content,currentAdmin)){
+        const interpreted=await interpretAdmin(content,currentAdmin),payload={...(currentAdmin?.payload||{}),...cleanPayload(interpreted.payload)},intent=interpreted.intent==="none"?(currentAdmin?.intent||"none"):interpreted.intent,draft={...(result.conversation.draft||{})};
+        const readResult=await readAdminAction(intent,payload,result.conversation,user);
+        if(readResult){delete draft.pendingAdminDraft;draft.lastResultLink=readResult.link||null;await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:readResult.message});const[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{draft,updatedAt:new Date()});return Response.json({conversation,message:readResult.message,link:readResult.link})}
+        let reply=interpreted.assistantReply;
+        if(interpreted.readyToConfirm){const summary=actionSummary(intent,payload);draft.pendingAction={intent,payload,summary};delete draft.pendingAdminDraft;reply+=`\n\nVista previa:\n${summary}\n\nConfirma la acción desde la tarjeta lateral.`}else draft.pendingAdminDraft={intent,payload};
+        await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});const[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{draft,updatedAt:new Date()});return Response.json({conversation,message:reply});
       }
       const allMessages=[...result.messages,{role:"user",content}],companies=await selectRows<Record<string,any>>("companies","select=id,name,city,status&order=name.asc"),equipment=await selectRows<Record<string,any>>("equipment","select=id,company_id,name,brand,model,serial_number&order=name.asc");
       const catalog=companies.map(company=>({companyId:company.id,company:company.name,city:company.city,equipment:equipment.filter(item=>item.companyId===company.id)}));
@@ -151,6 +166,11 @@ export async function POST(request:Request){
     if(message==="EQUIPMENT_REQUIRED")return Response.json({error:"Antes de guardar, identifica claramente la empresa y el equipo en la conversación."},{status:400});
     if(message==="REPORT_INCOMPLETE")return Response.json({error:"Faltan datos obligatorios. Continúa conversando hasta completar equipo, tipo, fecha, técnico, falla y detalle."},{status:400});
     if(message==="CALIBRATION_REQUIRED")return Response.json({error:"La verificación de calibración está marcada como Sí, pero faltan las filas de medición. Continúa el chat y registra cada medición antes de finalizar."},{status:400});
+    if(message==="DUPLICATE_COMPANY")return Response.json({error:"Ya existe una empresa con ese nombre o NIT."},{status:409});
+    if(message==="COMPANY_REQUIRED")return Response.json({error:"No se encontró la empresa indicada."},{status:400});
+    if(message==="QUOTATION_REQUIRED")return Response.json({error:"No se encontró la cotización indicada."},{status:400});
+    if(message==="QUOTATION_ITEMS_REQUIRED")return Response.json({error:"La cotización debe conservar al menos un producto o servicio."},{status:400});
+    if(message==="FORBIDDEN_ADMIN_ACTION")return Response.json({error:"Tu perfil técnico puede gestionar reportes, pero esta operación administrativa requiere perfil de propietario o administrador."},{status:403});
     return Response.json({error:"No fue posible procesar el asistente técnico."},{status:500});
   }
 }

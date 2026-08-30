@@ -11,3 +11,4 @@
 .calibration-confirm button{border:0;border-radius:7px;padding:8px 10px;margin:4px 5px 0 0;cursor:pointer;font-size:8px;font-weight:800}
 .calibration-confirm button:first-of-type{background:#ef8d16;color:#fff}
 .assistant-composer:has(.assistant-attach) textarea{padding-left:48px}
+.admin-confirm{padding:12px;border:1px solid #ca394f;background:#fff3f5;border-radius:10px;margin:10px 0}.admin-confirm p{font-size:9px;white-space:pre-wrap;line-height:1.55}.admin-confirm button{border:0;border-radius:7px;padding:8px 10px;margin:4px 5px 0 0;cursor:pointer;font-size:8px;font-weight:800}.admin-confirm button:first-of-type{background:#b5223a;color:#fff}.assistant-result-link{display:block;background:#29292d;color:#fff;text-decoration:none;padding:10px;margin:10px 0;border-radius:7px;text-align:center;font-size:9px;font-weight:900}

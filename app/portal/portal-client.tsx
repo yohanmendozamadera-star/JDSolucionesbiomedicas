@@ -30,7 +30,7 @@ export default function PortalClient({ email, name, role, company }: { email: st
     const response = await fetch("/api/profiles");
     if (response.ok) setProfiles((await response.json()).profiles);
   };
-  useEffect(() => { loadProfiles(); setCollapsed(localStorage.getItem("jd-sidebar-collapsed") === "true"); }, []);
+  useEffect(() => { loadProfiles(); setCollapsed(localStorage.getItem("jd-sidebar-collapsed") === "true");const requested=new URLSearchParams(window.location.search).get("tab");if(requested&&menu.some(item=>item[0]===requested))setTab(requested); }, []);
   const toggleSidebar = () => setCollapsed(value => { const next = !value; localStorage.setItem("jd-sidebar-collapsed", String(next)); return next; });
 
   const createProfile = async (event: React.FormEvent<HTMLFormElement>) => {
