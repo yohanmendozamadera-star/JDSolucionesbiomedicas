@@ -5,17 +5,13 @@ import CompaniesView from "./companies-view";
 import { OrdersView, ProductsView, QuotationsView, SettingsView } from "./commercial-views";
 import ExpensesView from "./expenses-view";
 import AssistantView from "./assistant-view";
+import OperationView from "./operation-view";
+import InvoicesView from "./invoices-view";
 
 type Role = "superowner" | "owner" | "admin" | "technician";
 type Profile = { id: number; name: string; email: string; role: "owner" | "admin" | "technician"; company: string; status: string };
 
 const menuBase = [["Dashboard","⌂"],["Operación","⚙"],["Asistente técnico","✦"],["Productos","◆"],["Cotizaciones","◫"],["Pedidos","▣"],["Facturación","▧"],["Gastos","$"]];
-const records: Record<string, string[][]> = {
-  "Operación": [["SRV-1082","Mantenimiento preventivo","En proceso"],["SRV-1081","Calibración de lensómetro","Programado"],["SRV-1080","Reparación electrónica","Finalizado"]],
-  "Cotizaciones": [["COT-0918","Autorefractómetro AR-310","Por revisar"],["COT-0917","Calibración anual","Enviada"],["COT-0916","Lámpara de hendidura","Aceptada"]],
-  "Pedidos": [["PED-0421","Lensómetro digital LM-7","Nuevo"],["PED-0420","Kit de repuestos","Preparando"],["PED-0419","Lámpara LED SL-2","Enviado"]],
-  "Facturación": [["FV-2081","Servicio preventivo","Pagada"],["FV-2080","Calibración certificada","Pendiente"],["FV-2079","Repuesto electrónico","Vencida"]],
-};
 
 export default function PortalClient({ email, name, role, company }: { email: string; name: string; role: Role; company: string }) {
   const [tab, setTab] = useState("Dashboard");
@@ -43,17 +39,13 @@ export default function PortalClient({ email, name, role, company }: { email: st
   };
 
   return <div className={`owner-portal ${collapsed ? "sidebar-collapsed" : ""}`}><aside className="owner-sidebar"><button className="sidebar-toggle" onClick={toggleSidebar} aria-label={collapsed ? "Expandir menú" : "Contraer menú"} title={collapsed ? "Expandir menú" : "Contraer menú"}>{collapsed ? "›" : "‹"}</button><a href="/" className="owner-logo"><img src="/brand/jd-soluciones-logo.png" alt="JD Soluciones Biomédicas" /></a><div className="account-chip"><span>{name.slice(0,2).toUpperCase()}</span><div><b>{name}</b><small>{roleLabel}</small></div></div><nav>{menu.map(item => <button key={item[0]} title={collapsed ? item[0] : undefined} className={tab === item[0] ? "active" : ""} onClick={() => setTab(item[0])}><i>{item[1]}</i><span>{item[0]}</span></button>)}</nav><div className="owner-id"><small>CUENTA ACTIVA</small><b>{email}</b></div><a className="portal-exit" href="/api/auth/logout">Cerrar sesión</a></aside>
-    <main className="owner-main"><header><div><small>PORTAL DE {company.toUpperCase()}</small><h1>{tab}</h1></div><div className="role-badge">◆ {roleLabel}</div></header><section className="owner-content">{tab === "Dashboard" && <Dashboard name={name} role={roleLabel} />}{records[tab] && !["Cotizaciones","Pedidos"].includes(tab) && <Records title={tab} rows={records[tab]} />}{tab === "Asistente técnico" && <AssistantView />}{tab === "Productos" && <ProductsView />}{tab === "Cotizaciones" && <QuotationsView />}{tab === "Pedidos" && <OrdersView />}{tab === "Gastos" && <ExpensesView />}{tab === "Empresas" && <CompaniesView />}{tab === "Configuraciones" && <SettingsView />}{tab === "Usuarios y permisos" && <Permissions profiles={profiles} createProfile={createProfile} />}</section></main>{notice && <div className="portal-toast">✓ {notice}<button onClick={() => setNotice("")}>×</button></div>}</div>;
+    <main className="owner-main"><header><div><small>PORTAL DE {company.toUpperCase()}</small><h1>{tab}</h1></div><div className="role-badge">◆ {roleLabel}</div></header><section className="owner-content">{tab === "Dashboard" && <Dashboard name={name} role={roleLabel} />}{tab === "Operación" && <OperationView/>}{tab === "Facturación" && <InvoicesView/>}{tab === "Asistente técnico" && <AssistantView />}{tab === "Productos" && <ProductsView />}{tab === "Cotizaciones" && <QuotationsView />}{tab === "Pedidos" && <OrdersView />}{tab === "Gastos" && <ExpensesView />}{tab === "Empresas" && <CompaniesView />}{tab === "Configuraciones" && <SettingsView />}{tab === "Usuarios y permisos" && <Permissions profiles={profiles} createProfile={createProfile} />}</section></main>{notice && <div className="portal-toast">✓ {notice}<button onClick={() => setNotice("")}>×</button></div>}</div>;
 }
 
 function Dashboard({ name, role }: { name: string; role: string }) {
   const [reportMetrics,setReportMetrics]=useState({pendingReports:0,completedReports:0,openOrders:0,openQuotations:0});
   useEffect(()=>{fetch("/api/dashboard").then(r=>r.json()).then(data=>setReportMetrics(data)).catch(()=>{})},[]);
   return <><div className="owner-welcome"><div><span>CONTROL GENERAL</span><h2>Hola, {name.split(" ")[0]}</h2><p>Tienes acceso como {role.toLowerCase()} a la operación de JD Soluciones Biomédicas.</p></div><i>JD</i></div><div className="owner-kpis">{[["Reportes pendientes",String(reportMetrics.pendingReports),"Guardados parcialmente"],["Reportes finalizados",String(reportMetrics.completedReports),"Servicios terminados"],["Pedidos abiertos",String(reportMetrics.openOrders),"Recibidos desde productos"],["Cotizaciones abiertas",String(reportMetrics.openQuotations),"Solicitudes por gestionar"]].map(k => <article key={k[0]}><small>{k[0]}</small><b>{k[1]}</b><span>{k[2]}</span></article>)}</div><div className="portal-panels"><section><h3>Actividad reciente</h3>{["Reportes pendientes conectados a la base de datos","Pedidos conectados al catálogo público","Cotizaciones recibidas desde la página principal"].map(x => <p key={x}>✓ <span>{x}</span><small>Estado actual</small></p>)}</section><section><h3>Agenda de operación</h3>{["08:30 · Mantenimiento preventivo","11:00 · Calibración","14:30 · Diagnóstico técnico"].map(x => <p key={x}>◷ <span>{x}</span></p>)}</section></div></>;
-}
-
-function Records({ title, rows }: { title: string; rows: string[][] }) {
-  return <div className="portal-table"><div className="portal-title"><div><h2>{title}</h2><p>Consulta y administra la información de tu empresa.</p></div><button>＋ Nuevo registro</button></div><div className="portal-table-head"><span>Referencia</span><span>Detalle</span><span>Estado</span><span>Acción</span></div>{rows.map(r => <div className="portal-table-row" key={r[0]}><b>{r[0]}</b><span>{r[1]}</span><em>{r[2]}</em><button>Ver detalle →</button></div>)}</div>;
 }
 
 function Permissions({ profiles, createProfile }: { profiles: Profile[]; createProfile: (e: React.FormEvent<HTMLFormElement>) => void }) {

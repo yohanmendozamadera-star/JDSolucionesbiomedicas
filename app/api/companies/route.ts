@@ -1,4 +1,4 @@
-import { filterValue, insertRow, selectRows } from "../../../db/supabase";
+import { insertRow, selectRows, updateRows } from "../../../db/supabase";
 import { getSessionUser } from "../../app-auth";
 
 export async function GET() {
@@ -13,6 +13,15 @@ export async function GET() {
     return { ...company, equipment: nested };
   }));
   return Response.json({ companies: result });
+}
+
+export async function PATCH(request: Request) {
+  const user=await getSessionUser();
+  if(!user||!['superowner','owner','admin'].includes(String(user.role))) return Response.json({error:"No autorizado"},{status:403});
+  const body=await request.json();
+  if(!body.id||!["active","pending","inactive"].includes(body.status)) return Response.json({error:"Estado inválido"},{status:400});
+  const rows=await updateRows<Record<string,any>>("companies",`id=eq.${Number(body.id)}`,{status:body.status});
+  return Response.json({company:rows[0]});
 }
 
 export async function POST(request: Request) {
