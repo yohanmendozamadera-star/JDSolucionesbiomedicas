@@ -1,5 +1,5 @@
 import { getSessionUser } from "../../app-auth";
-import { filterValue, insertRow, selectRows, updateRows } from "../../../db/supabase";
+import { insertRow, selectRows, updateRows } from "../../../db/supabase";
 import { putFile } from "../../../db/file-storage";
 import { actionSummary, cleanPayload, executeAdminAction, interpretAdmin, isAdminRequest, readAdminAction } from "./admin-actions";
 
@@ -9,6 +9,9 @@ const calibrationRow={type:"object",additionalProperties:false,required:calibrat
 const draftKeys=["serviceType","serviceDate","startTime","endTime","clientPhone","summary","reportedFaultCode","foundFaultCode","serviceDetail","technician","serviceValue","calibrationVerified","calibrationRowCount","calibrationMeasurements","observations","receivedBy"];
 const schema={type:"object",additionalProperties:false,required:["assistantReply","title","companyId","equipmentId","draft"],properties:{assistantReply:{type:"string"},title:{type:"string"},companyId:nullableInteger,equipmentId:nullableInteger,draft:{type:"object",additionalProperties:false,required:draftKeys,properties:{serviceType:nullableString,serviceDate:nullableString,startTime:nullableString,endTime:nullableString,clientPhone:nullableString,summary:nullableString,reportedFaultCode:nullableString,foundFaultCode:nullableString,serviceDetail:nullableString,technician:nullableString,serviceValue:nullableNumber,calibrationVerified:nullableBoolean,calibrationRowCount:nullableInteger,calibrationMeasurements:{type:["array","null"],items:calibrationRow,maxItems:4},observations:nullableString,receivedBy:nullableString}}}};
 const imageSchema={type:"object",additionalProperties:false,required:["assistantReply","rowCount","measurements","uncertainFields"],properties:{assistantReply:{type:"string"},rowCount:{type:"integer"},measurements:{type:"array",items:calibrationRow,maxItems:4},uncertainFields:{type:"array",items:{type:"string"}}}};
+const equipmentImageSchema={type:"object",additionalProperties:false,required:["assistantReply","equipmentName","brand","model","serialNumber","manufacturer","electricalInfo","requiresMetrology","confidence","uncertainFields"],properties:{assistantReply:{type:"string"},equipmentName:nullableString,brand:nullableString,model:nullableString,serialNumber:nullableString,manufacturer:nullableString,electricalInfo:nullableString,requiresMetrology:nullableBoolean,confidence:{type:"string",enum:["alta","media","baja"]},uncertainFields:{type:"array",items:{type:"string"}}}};
+const companyImageSchema={type:"object",additionalProperties:false,required:["assistantReply","companyName","nit","representative","phone","email","department","municipality","address","confidence","uncertainFields"],properties:{assistantReply:{type:"string"},companyName:nullableString,nit:nullableString,representative:nullableString,phone:nullableString,email:nullableString,department:nullableString,municipality:nullableString,address:nullableString,confidence:{type:"string",enum:["alta","media","baja"]},uncertainFields:{type:"array",items:{type:"string"}}}};
+const companyLookupSchema={type:"object",additionalProperties:false,required:["found","assistantReply","companyName","nit","representative","phone","email","department","municipality","status","sourceUrl"],properties:{found:{type:"boolean"},assistantReply:{type:"string"},companyName:nullableString,nit:nullableString,representative:nullableString,phone:nullableString,email:nullableString,department:nullableString,municipality:nullableString,status:nullableString,sourceUrl:nullableString}};
 
 async function requireUser(){const user=await getSessionUser();if(!user)throw new Error("UNAUTHORIZED");return user}
 const safe=(value:unknown)=>String(value??"").trim();
@@ -75,6 +78,23 @@ async function readCalibrationImage(bytes:ArrayBuffer,type:string){
   const data=await response.json(),raw=data.output_text||data.output?.flatMap((item:any)=>item.content||[]).find((item:any)=>item.type==="output_text")?.text;if(!raw)throw new Error("OPENAI_EMPTY");return JSON.parse(raw);
 }
 
+async function readRecordImage(bytes:ArrayBuffer,type:string,purpose:"equipment"|"company"){
+  const key=process.env.OPENAI_API_KEY;if(!key)throw new Error("OPENAI_MISSING");
+  const imageUrl=`data:${type};base64,${Buffer.from(bytes).toString("base64")}`,equipment=purpose==="equipment";
+  const instructions=equipment?"Analiza exclusivamente la placa de identificación del equipo biomédico u óptico. Transcribe literalmente nombre/tipo, marca, modelo, serial, fabricante y datos eléctricos visibles. No deduzcas un serial ni inventes campos. Indica si por el tipo de equipo parece requerir control metrológico, pero usa null si no es claro. Marca los campos dudosos y resume lo encontrado para confirmación humana.":"Analiza el RUT, certificado o documento empresarial colombiano de la imagen. Extrae literalmente razón social, NIT, representante, teléfono, correo, departamento, municipio y dirección solo cuando sean visibles. No inventes ni completes información desde conocimiento general. Marca los campos dudosos y solicita los faltantes.";
+  const schemaForImage=equipment?equipmentImageSchema:companyImageSchema,name=equipment?"equipment_plate_reading":"company_document_reading";
+  const response=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{authorization:`Bearer ${key}`,"content-type":"application/json"},body:JSON.stringify({model:process.env.OPENAI_VISION_MODEL||process.env.OPENAI_MODEL||"gpt-4o-mini",instructions,input:[{role:"user",content:[{type:"input_text",text:equipment?"Extrae los datos de identificación de esta placa.":"Extrae los datos empresariales de este documento."},{type:"input_image",image_url:imageUrl,detail:"high"}]}],text:{format:{type:"json_schema",name,strict:true,schema:schemaForImage}},max_output_tokens:1400})});
+  if(!response.ok){const failure=await response.json().catch(()=>null),code=safe(failure?.error?.code)||safe(failure?.error?.type)||`http_${response.status}`,detail=safeOpenAIError(failure?.error?.message)||"Sin detalle adicional";throw new Error(`OPENAI_${code}|${detail}`)}
+  const data=await response.json(),raw=data.output_text||data.output?.flatMap((item:any)=>item.content||[]).find((item:any)=>item.type==="output_text")?.text;if(!raw)throw new Error("OPENAI_EMPTY");return JSON.parse(raw);
+}
+
+async function lookupCompanyByNit(nit:string){
+  const key=process.env.OPENAI_API_KEY;if(!key)throw new Error("OPENAI_MISSING");
+  const response=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{authorization:`Bearer ${key}`,"content-type":"application/json"},body:JSON.stringify({model:process.env.OPENAI_LOOKUP_MODEL||process.env.OPENAI_MODEL||"gpt-4o-mini",instructions:"Consulta únicamente fuentes oficiales colombianas de RUES/Confecámaras o DIAN. Busca la empresa por el NIT indicado sin inventar datos. Si una fuente no muestra un campo, devuelve null. Incluye la URL oficial principal usada. La información es una propuesta que requiere confirmación humana.",input:`Consulta el NIT ${nit} en Colombia.`,tools:[{type:"web_search",filters:{allowed_domains:["rues.org.co","confecamaras.org.co","dian.gov.co"]}}],text:{format:{type:"json_schema",name:"company_nit_lookup",strict:true,schema:companyLookupSchema}},max_output_tokens:1200})});
+  if(!response.ok){const failure=await response.json().catch(()=>null),code=safe(failure?.error?.code)||safe(failure?.error?.type)||`http_${response.status}`,detail=safeOpenAIError(failure?.error?.message)||"Sin detalle adicional";throw new Error(`OPENAI_${code}|${detail}`)}
+  const data=await response.json(),raw=data.output_text||data.output?.flatMap((item:any)=>item.content||[]).find((item:any)=>item.type==="output_text")?.text;if(!raw)throw new Error("OPENAI_EMPTY");return JSON.parse(raw);
+}
+
 async function persistReport(conversation:any,draft:any,status:"pending"|"completed"){
   const equipmentId=Number(draft.equipmentId||conversation.equipmentId||0);if(!equipmentId)throw new Error("EQUIPMENT_REQUIRED");
   const [equipment]=await selectRows<Record<string,any>>("equipment",`select=*&id=eq.${equipmentId}&limit=1`);if(!equipment)throw new Error("EQUIPMENT_REQUIRED");
@@ -98,8 +118,16 @@ export async function POST(request:Request){
     if(action==="image"){
       const image=body.get("image");if(!(image instanceof File)||!image.size)return Response.json({error:"Selecciona una imagen."},{status:400});
       const allowed=new Set(["image/jpeg","image/png","image/webp"]);if(!allowed.has(image.type)||image.size>5*1024*1024)return Response.json({error:"La imagen debe ser JPG, PNG o WEBP y pesar máximo 5 MB."},{status:400});
-      const bytes=await image.arrayBuffer(),attachmentKey=`assistant/${id}/${crypto.randomUUID()}-${image.name.replace(/[^a-zA-Z0-9._-]/g,"-")}`;await putFile(attachmentKey,bytes,image.type);
-      await insertRow("assistant_messages",{conversationId:id,role:"user",content:`Imagen de mediciones adjunta: ${image.name}`,attachmentKey,attachmentName:image.name,attachmentContentType:image.type});
+      const purpose=safe(body.get("imagePurpose"))||"calibration",bytes=await image.arrayBuffer(),attachmentKey=`assistant/${id}/${crypto.randomUUID()}-${image.name.replace(/[^a-zA-Z0-9._-]/g,"-")}`;await putFile(attachmentKey,bytes,image.type);
+      await insertRow("assistant_messages",{conversationId:id,role:"user",content:`Imagen adjunta para ${purpose==="equipment"?"identificar equipo":purpose==="company"?"leer empresa/RUT":"leer mediciones"}: ${image.name}`,attachmentKey,attachmentName:image.name,attachmentContentType:image.type});
+      if(purpose==="equipment"||purpose==="company"){
+        if(user.role==="technician"&&purpose==="company")throw new Error("FORBIDDEN_ADMIN_ACTION");
+        const reading=await readRecordImage(bytes,image.type,purpose),draft={...(result.conversation.draft||{})};
+        if(purpose==="equipment")draft.pendingAdminDraft={intent:"create_equipment",payload:cleanPayload({equipmentName:reading.equipmentName,brand:reading.brand||reading.manufacturer,model:reading.model,serialNumber:reading.serialNumber,requiresMetrology:reading.requiresMetrology,evidenceKey:attachmentKey,sourceNote:[reading.manufacturer,reading.electricalInfo].filter(Boolean).join(" · ")})};
+        else draft.pendingAdminDraft={intent:"create_company",payload:cleanPayload({companyName:reading.companyName,nit:reading.nit,representative:reading.representative,phone:reading.phone,email:reading.email,department:reading.department,municipality:reading.municipality,sourceNote:reading.address})};
+        const uncertain=reading.uncertainFields?.length?`\n\nRevisa especialmente: ${reading.uncertainFields.join(", ")}.`:"",reply=`${reading.assistantReply}${uncertain}\n\nConfianza de lectura: ${reading.confidence}. Dime los datos faltantes o corrige cualquiera; después te mostraré la confirmación antes de guardar.`;
+        await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});const[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{draft,updatedAt:new Date()});return Response.json({conversation,message:reply});
+      }
       const reading=await readCalibrationImage(bytes,image.type),pendingCalibration={rowCount:Math.min(4,Math.max(0,Number(reading.rowCount||reading.measurements?.length||0))),measurements:reading.measurements||[],uncertainFields:reading.uncertainFields||[],imageKey:attachmentKey,fileName:image.name};
       const reply=`${reading.assistantReply}\n\n${pendingCalibration.uncertainFields.length?`Campos que debes revisar: ${pendingCalibration.uncertainFields.join(", ")}.`:"No marqué campos dudosos, pero confirma visualmente los valores antes de incorporarlos."}`;
       await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});
@@ -126,6 +154,13 @@ export async function POST(request:Request){
         await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});
         const[conversation]=await updateRows<Record<string,any>>( "assistant_conversations",`id=eq.${id}`,{title:newTitle,draft:{...(result.conversation.draft||{}),titleLocked:true},updatedAt:new Date()});
         return Response.json({conversation,message:reply});
+      }
+      const nitMatch=content.match(/\b(?:nit\s*)?((?:\d[.\s-]?){7,12})(?:\s*-?\s*\d)?\b/i);
+      if(nitMatch&&/\b(nit|empresa|raz[oó]n social|consultar?|buscar?)\b/i.test(content)&&/\b(crear?|registrar?|consultar?|buscar?|datos?)\b/i.test(content)){
+        if(user.role==="technician")throw new Error("FORBIDDEN_ADMIN_ACTION");
+        const nit=nitMatch[1].replace(/\D/g,""),lookup=await lookupCompanyByNit(nit),payload=cleanPayload({companyName:lookup.companyName,nit:lookup.nit||nit,representative:lookup.representative,phone:lookup.phone,email:lookup.email,department:lookup.department,municipality:lookup.municipality,sourceNote:lookup.sourceUrl}),draft={...(result.conversation.draft||{}),pendingAdminDraft:{intent:"create_company",payload}};
+        const missing=[!payload.companyName&&"razón social",!payload.representative&&"representante",!payload.phone&&"teléfono",!payload.email&&"correo",!payload.department&&"departamento",!payload.municipality&&"municipio"].filter(Boolean),reply=`${lookup.assistantReply}\n\n${lookup.found?`Datos encontrados para el NIT ${nit}.`:"No pude confirmar datos oficiales para ese NIT."}${lookup.sourceUrl?`\nFuente: ${lookup.sourceUrl}`:""}${missing.length?`\nFalta completar: ${missing.join(", ")}.`:"\nLos datos están completos; dime si deseas preparar la confirmación."}`;
+        await insertRow("assistant_messages",{conversationId:id,role:"assistant",content:reply});const[conversation]=await updateRows<Record<string,any>>("assistant_conversations",`id=eq.${id}`,{draft,updatedAt:new Date()});return Response.json({conversation,message:reply});
       }
       const currentAdmin=result.conversation.draft?.pendingAdminDraft;
       if(isAdminRequest(content,currentAdmin)){
