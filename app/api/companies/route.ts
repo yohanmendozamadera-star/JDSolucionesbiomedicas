@@ -1,18 +1,23 @@
 import { insertRow, selectRows, updateRows } from "../../../db/supabase";
 import { getSessionUser } from "../../app-auth";
+import { readLocalEquipmentConfig } from "../../../db/local-equipment-config";
 
 export async function GET() {
   if (!await getSessionUser()) return Response.json({ error: "No autorizado" }, { status: 401 });
-  const companyRows = await selectRows<Record<string, any>>("companies", "select=*&order=name.asc");
+  const [companyRows, localConfig] = await Promise.all([
+    selectRows<Record<string, any>>("companies", "select=*&order=name.asc"),
+    readLocalEquipmentConfig(),
+  ]);
   const result = await Promise.all(companyRows.map(async company => {
-    const equipmentRows = await selectRows<Record<string, any>>("equipment", `select=*&company_id=eq.${company.id}&order=name.asc`);
+    const equipmentRows = await selectRows<Record<string, any>>("equipment", `select=*&company_id=eq.${company.id}&order=registered_at.desc`);
     const nested = await Promise.all(equipmentRows.map(async item => ({
       ...item,
+      planning: localConfig.equipment[String(item.id)] ?? {},
       reports: await selectRows<Record<string, any>>("service_reports", `select=*&equipment_id=eq.${item.id}&order=service_date.asc`),
     })));
     return { ...company, equipment: nested };
   }));
-  return Response.json({ companies: result });
+  return Response.json({ companies: result, riskCatalog: localConfig.risks });
 }
 
 export async function PATCH(request: Request) {

@@ -1,3 +1,8 @@
+@import "./company-documents.css";
+@import "./equipment-list.css";
+@import "./agenda.css";
+@import "./navigation.css";
+@import "./quote-response.css";
 @import "tailwindcss";
 :root{--font-sans:Arial,Helvetica,sans-serif;--font-display:Arial,Helvetica,sans-serif}
 .report-form-buttons button:nth-child(2){background:#fff4e5;color:#9d5f17;border:1px solid #f0d3a4}.report-form-buttons button:nth-child(3){background:linear-gradient(135deg,#2f9b62,#176b43);color:#fff;border:0}
